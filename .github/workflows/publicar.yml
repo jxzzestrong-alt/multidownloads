@@ -1,0 +1,46 @@
+name: Publicar versión
+
+# Cada versión nueva llega como una rama «subir-<etiqueta>» con las APK y version.json.
+# Aquí se revisa que cuadren, se publica como versión (la app la busca en releases/latest)
+# y se borra la rama para no guardar las APK en el historial.
+on:
+  push:
+    branches: ['subir-*']
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Revisar y publicar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Las APK pueden venir en partes (para que quepan al subirlas)
+          for f in MultiDownloads-*.apk.parte-aa; do
+            [ -e "$f" ] || continue
+            base="${f%.parte-aa}"
+            cat "$base".parte-* > "$base"
+            rm -f "$base".parte-*
+          done
+          python3 - <<'PY'
+          import hashlib, json, os
+          v = json.load(open("version.json", encoding="utf-8"))
+          for abi, a in v["apks"].items():
+              assert os.path.getsize(a["archivo"]) == a["bytes"], f"{abi}: tamaño distinto"
+              assert hashlib.sha256(open(a["archivo"], "rb").read()).hexdigest() == a["sha256"], f"{abi}: SHA-256 distinto"
+          with open(os.environ["GITHUB_ENV"], "a") as e:
+              e.write(f'TAG={v["etiqueta"]}\nNOMBRE={v["nombre"]}\n')
+          notas = ["Abre la app y toca **Actualizar** (o Ajustes → Versión de la app): se instala encima, sin desinstalar.", "",
+                   "Si aún no tienes la app: instala MultiDownloads-arm64.apk (la mayoría de teléfonos) o la armv7 si tu teléfono es muy antiguo.", ""]
+          notas += [f"- {n}" for n in v.get("novedades", [])]
+          open("notas.md", "w", encoding="utf-8").write("\n".join(notas) + "\n")
+          print("cuadra:", v["nombre"], v["codigo"], v["etiqueta"])
+          PY
+          gh release create "$TAG" MultiDownloads-*.apk version.json \
+            --title "MultiDownloads $NOMBRE" --notes-file notas.md --target main --latest
+          git push origin --delete "$GITHUB_REF_NAME"
