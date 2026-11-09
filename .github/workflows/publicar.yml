@@ -2,7 +2,8 @@ name: Publicar versión
 
 # Cada versión nueva llega como una rama «subir-<etiqueta>» con las APK y version.json.
 # Aquí se revisa que cuadren, se publica como versión (la app la busca en releases/latest)
-# y se borra la rama para no guardar las APK en el historial.
+# y se borran las ramas de subida para no guardar las APK en el historial.
+# (La rama tiene que salir de main: GitHub toma el flujo de trabajo de la rama que se sube.)
 on:
   push:
     branches: ['subir-*']
@@ -43,4 +44,7 @@ jobs:
           PY
           gh release create "$TAG" MultiDownloads-*.apk version.json \
             --title "MultiDownloads $NOMBRE" --notes-file notas.md --target main --latest
-          git push origin --delete "$GITHUB_REF_NAME"
+          # Ya publicada: se borran las ramas de subida (esta y las que hayan quedado)
+          for rama in $(git ls-remote --heads origin | awk '{print $2}' | sed 's#refs/heads/##' | grep -v '^main$'); do
+            git push origin --delete "$rama" || true
+          done
