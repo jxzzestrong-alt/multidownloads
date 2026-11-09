@@ -15,7 +15,7 @@ jobs:
   publicar:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Revisar y publicar
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -34,14 +34,15 @@ jobs:
           for abi, a in v["apks"].items():
               assert os.path.getsize(a["archivo"]) == a["bytes"], f"{abi}: tamaño distinto"
               assert hashlib.sha256(open(a["archivo"], "rb").read()).hexdigest() == a["sha256"], f"{abi}: SHA-256 distinto"
-          with open(os.environ["GITHUB_ENV"], "a") as e:
-              e.write(f'TAG={v["etiqueta"]}\nNOMBRE={v["nombre"]}\n')
+          open("etiqueta.txt", "w").write(v["etiqueta"])
+          open("nombre.txt", "w").write(v["nombre"])
           notas = ["Abre la app y toca **Actualizar** (o Ajustes → Versión de la app): se instala encima, sin desinstalar.", "",
                    "Si aún no tienes la app: instala MultiDownloads-arm64.apk (la mayoría de teléfonos) o la armv7 si tu teléfono es muy antiguo.", ""]
           notas += [f"- {n}" for n in v.get("novedades", [])]
           open("notas.md", "w", encoding="utf-8").write("\n".join(notas) + "\n")
           print("cuadra:", v["nombre"], v["codigo"], v["etiqueta"])
           PY
+          TAG=$(cat etiqueta.txt); NOMBRE=$(cat nombre.txt)
           gh release create "$TAG" MultiDownloads-*.apk version.json \
             --title "MultiDownloads $NOMBRE" --notes-file notas.md --target main --latest
           # Ya publicada: se borran las ramas de subida (esta y las que hayan quedado)
