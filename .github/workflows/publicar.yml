@@ -46,6 +46,6 @@ jobs:
           gh release create "$TAG" MultiDownloads-*.apk version.json \
             --title "MultiDownloads $NOMBRE" --notes-file notas.md --target main --latest
           # Ya publicada: se borran las ramas de subida (esta y las que hayan quedado)
-          for rama in $(git ls-remote --heads origin | awk '{print $2}' | sed 's#refs/heads/##' | grep -v '^main$'); do
+          for rama in $(git ls-remote --heads origin | awk '{print $2}' | sed 's#refs/heads/##' | grep -E '^(subir|carga)-'); do
             git push origin --delete "$rama" || true
           done

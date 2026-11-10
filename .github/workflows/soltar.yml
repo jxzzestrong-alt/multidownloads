@@ -1,0 +1,38 @@
+name: Publicar borrador
+
+# Publica como versión más reciente (la que busca la app) un borrador ya probado.
+# Se usa subiendo una rama «soltar-<etiqueta>», por ejemplo soltar-v3.8-5.
+on:
+  push:
+    branches: ['soltar-*']
+
+permissions:
+  contents: write
+
+jobs:
+  soltar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Revisar y publicar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#soltar-}"
+          mkdir -p revisar && cd revisar
+          gh release download "$TAG" -R "${{ github.repository }}"
+          TAG="$TAG" python3 - <<'PY'
+          import hashlib, json, os
+          v = json.load(open("version.json", encoding="utf-8"))
+          assert v["etiqueta"] == os.environ["TAG"], "la etiqueta no cuadra"
+          for abi, a in v["apks"].items():
+              assert os.path.getsize(a["archivo"]) == a["bytes"], f"{abi}: tamaño distinto"
+              assert hashlib.sha256(open(a["archivo"], "rb").read()).hexdigest() == a["sha256"], f"{abi}: SHA-256 distinto"
+          print("cuadra:", v["nombre"], v["codigo"], v["etiqueta"])
+          PY
+          gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --latest
+          echo "Publicada: $TAG"
+      - name: Borrar la rama
+        if: always()
+        run: git push origin --delete "$GITHUB_REF_NAME" || true

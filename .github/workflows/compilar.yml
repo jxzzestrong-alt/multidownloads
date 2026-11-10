@@ -1,0 +1,121 @@
+name: Compilar
+
+# Compila la app a partir del código cifrado que llega en una rama «codigo-*» (codigo/codigo.enc.*).
+# Sin la clave (el secreto CLAVE_CODIGO) el código no se puede leer: aquí solo se ven los pasos.
+# El resultado (registro y capturas de la prueba) también se guarda cifrado, en una rama «resultado-N».
+# En modo «completa» la versión queda como borrador; se publica subiendo una rama «soltar-<etiqueta>».
+on:
+  push:
+    branches: ['codigo-*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compilar
+  cancel-in-progress: false
+
+jobs:
+  compilar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Abrir el código
+        env:
+          CLAVE: ${{ secrets.CLAVE_CODIGO }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAVE:-}" ]; then
+            echo "::error::Falta el secreto CLAVE_CODIGO (Settings › Secrets and variables › Actions)"
+            exit 1
+          fi
+          mkdir -p fuente resultado
+          cat codigo/codigo.enc.* | openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -md sha256 -pass env:CLAVE | tar -xz -C fuente
+          MODO=$(cat codigo/modo.txt 2>/dev/null || echo rapida)
+          echo "MODO=$MODO" >> "$GITHUB_ENV"
+          echo "Código listo · modo $MODO"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            fuente/.github/cache/app-build-kts.txt
+            fuente/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Compilar
+        id: compilar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_N: ${{ github.run_number }}
+        run: |
+          cd fuente
+          if bash .github/publico/compilar.sh "$MODO" > ../resultado/compilacion.txt 2>&1; then
+            echo "Compilación: bien"
+          else
+            echo "Compilación: falló"
+            exit 1
+          fi
+
+      - name: Activar aceleración del emulador
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Probar en un emulador
+        continue-on-error: true
+        timeout-minutes: 150
+        run: |
+          cd fuente
+          bash .github/publico/emulador.sh "$MODO" > ../resultado/consola.txt 2>&1 || true
+          echo "Prueba terminada"
+
+      - name: Versión en borrador
+        if: env.MODO == 'completa'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd fuente/salida
+          TAG=$(cat etiqueta.txt); NOMBRE=$(cat nombre.txt)
+          gh release create "$TAG" MultiDownloads-arm64.apk MultiDownloads-armv7.apk version.json --draft \
+            --title "MultiDownloads $NOMBRE" --notes-file notas.md --target main
+          echo "Borrador listo: $TAG"
+
+      - name: Guardar el resultado (cifrado)
+        if: always()
+        env:
+          CLAVE: ${{ secrets.CLAVE_CODIGO }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ESTADO: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          [ -n "${CLAVE:-}" ] || exit 0
+          mkdir -p resultado
+          cp -r fuente/prueba-app resultado/ 2>/dev/null || true
+          cp fuente/salida/version.json fuente/salida/etiqueta.txt resultado/ 2>/dev/null || true
+          [ -f fuente/compilacion-gradle.log ] && tail -n 4000 fuente/compilacion-gradle.log > resultado/gradle.txt
+          echo "$ESTADO" > resultado/estado.txt
+          mkdir -p subir
+          tar -czf - resultado | openssl enc -aes-256-cbc -pbkdf2 -iter 300000 -md sha256 -salt -pass env:CLAVE \
+            | split -b 90M -d - subir/resultado.enc.
+          ls -l subir
+          cd subir
+          git init -q
+          git checkout -q -b r
+          git add .
+          git -c user.name="MultiDownloads" -c user.email="actions@users.noreply.github.com" commit -qm "Resultado ${{ github.run_number }}"
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/resultado-${{ github.run_number }}"
+          echo "Resultado guardado en la rama resultado-${{ github.run_number }}"
+
+      - name: Limpiar ramas
+        if: always()
+        run: |
+          git push origin --delete "$GITHUB_REF_NAME" || true
+          # Solo se guardan los 3 resultados más recientes
+          for rama in $(git ls-remote --heads origin 'resultado-*' | awk '{print $2}' | sed 's#refs/heads/##' | sort -t- -k2 -n | head -n -3); do
+            git push origin --delete "$rama" || true
+          done
